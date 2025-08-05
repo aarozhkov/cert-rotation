@@ -245,7 +245,7 @@ class CertificateScheduler:
             'sync_in_progress': self.sync_in_progress,
             'last_sync_time': self.last_sync_time.isoformat() if self.last_sync_time else None,
             'certificates_count': len(self.cert_monitor.certificates),
-            'monitored_arns': settings.acm_cert_arns,
+            'monitored_arns': settings.acm_cert_arns_list,
             'check_interval_minutes': settings.check_interval_minutes,
             'recent_errors': self.sync_errors[-5:],  # Last 5 errors
             'next_sync': self._get_next_sync_time()

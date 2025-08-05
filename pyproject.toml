@@ -30,10 +30,6 @@ dev = [
     "mypy>=1.7.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [tool.uv]
 dev-dependencies = [
     "pytest>=7.4.0",

@@ -102,14 +102,14 @@ class ACMClient:
     async def get_monitored_certificates(self) -> Dict[str, Dict]:
         """Get details for all monitored certificates."""
         monitored_certs = {}
-        
-        for cert_arn in settings.acm_cert_arns:
+
+        for cert_arn in settings.acm_cert_arns_list:
             cert_details = await self.get_certificate_details(cert_arn)
             if cert_details:
                 monitored_certs[cert_arn] = cert_details
             else:
                 logger.warning(f"Could not get details for monitored certificate: {cert_arn}")
-        
+
         return monitored_certs
     
     def get_certificate_name(self, cert_details: Dict) -> str:

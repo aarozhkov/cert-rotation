@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     
     # Certificate management
     cert_path: str = Field(..., description="Path where certificates are stored")
-    acm_cert_arns: List[str] = Field(
-        default_factory=list,
-        description="List of ACM certificate ARNs to monitor"
+    acm_cert_arns: str = Field(
+        default="",
+        description="Comma-separated list of ACM certificate ARNs to monitor"
     )
     
     # AWS configuration
@@ -45,12 +45,12 @@ class Settings(BaseSettings):
     # Metrics configuration
     metrics_enabled: bool = Field(default=True, description="Enable Prometheus metrics")
     
-    @validator('acm_cert_arns', pre=True)
-    def parse_cert_arns(cls, v):
-        """Parse certificate ARNs from comma-separated string or list."""
-        if isinstance(v, str):
-            return [arn.strip() for arn in v.split(',') if arn.strip()]
-        return v
+    @property
+    def acm_cert_arns_list(self) -> List[str]:
+        """Get ACM certificate ARNs as a list."""
+        if not self.acm_cert_arns:
+            return []
+        return [arn.strip() for arn in self.acm_cert_arns.split(',') if arn.strip()]
     
     @validator('cert_path')
     def validate_cert_path(cls, v):
