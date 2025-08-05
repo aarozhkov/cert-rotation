@@ -97,11 +97,39 @@ async def manual_reload() -> Dict[str, str]:
 async def service_status() -> Dict[str, Any]:
     """Get service status and statistics."""
     global scheduler
-    
+
     if not scheduler:
         return {"status": "initializing"}
-    
+
     return await scheduler.get_status()
+
+
+@app.get("/status/list_acm")
+async def list_acm_certificates() -> Dict[str, Any]:
+    """List all certificates from AWS Certificate Manager."""
+    global scheduler
+
+    if not scheduler:
+        raise HTTPException(status_code=503, detail="Scheduler not initialized")
+
+    try:
+        # Get all certificates from ACM
+        all_certificates = await scheduler.acm_client.list_certificates()
+
+        # Get monitored certificates with details
+        monitored_certificates = await scheduler.acm_client.get_monitored_certificates()
+
+        return {
+            "all_certificates": all_certificates,
+            "monitored_certificates": monitored_certificates,
+            "monitored_arns": settings.acm_cert_arns_list,
+            "total_certificates": len(all_certificates),
+            "monitored_count": len(monitored_certificates)
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing ACM certificates: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list certificates: {str(e)}")
 
 
 def main():
