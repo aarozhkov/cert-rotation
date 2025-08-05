@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     
     # AWS configuration
     aws_region: str = Field(default="us-east-1", description="AWS region")
+    acm_passphrase: Optional[str] = Field(
+        default=None,
+        description="Passphrase for imported ACM certificates (if required)"
+    )
     
     # Scheduling configuration
     check_interval_minutes: int = Field(

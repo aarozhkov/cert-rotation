@@ -105,7 +105,7 @@ async def service_status() -> Dict[str, Any]:
 
 
 @app.get("/status/list_acm")
-async def list_acm_certificates() -> Dict[str, Any]:
+async def list_acm_certificates(include_tags: bool = False) -> Dict[str, Any]:
     """List all certificates from AWS Certificate Manager."""
     global scheduler
 
@@ -114,17 +114,18 @@ async def list_acm_certificates() -> Dict[str, Any]:
 
     try:
         # Get all certificates from ACM
-        all_certificates = await scheduler.acm_client.list_certificates()
+        all_certificates = await scheduler.acm_client.list_certificates(include_tags=include_tags)
 
         # Get monitored certificates with details
-        monitored_certificates = await scheduler.acm_client.get_monitored_certificates()
+        monitored_certificates = await scheduler.acm_client.get_monitored_certificates(include_tags=include_tags)
 
         return {
             "all_certificates": all_certificates,
             "monitored_certificates": monitored_certificates,
             "monitored_arns": settings.acm_cert_arns_list,
             "total_certificates": len(all_certificates),
-            "monitored_count": len(monitored_certificates)
+            "monitored_count": len(monitored_certificates),
+            "include_tags": include_tags
         }
 
     except Exception as e:
