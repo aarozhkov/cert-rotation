@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  cert-rotation:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./certs:/app/certs
+      - /var/run/docker.sock:/var/run/docker.sock  # If needed for container management
+    environment:
+      - CERT_ROTATION_CERT_PATH=/app/certs
+      - CERT_ROTATION_ACM_CERT_ARNS=arn:aws:acm:us-east-1:123456789012:certificate/example
+      - CERT_ROTATION_AWS_REGION=us-east-1
+      - CERT_ROTATION_CHECK_INTERVAL_MINUTES=60
+      - CERT_ROTATION_LOG_LEVEL=INFO
+      - CERT_ROTATION_HAPROXY_RELOAD_URL=http://haproxy:8404/reload
+    depends_on:
+      - haproxy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  haproxy:
+    image: haproxy:2.8
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8404:8404"  # Stats port
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./certs:/etc/ssl/certs:ro
+    restart: unless-stopped
+    depends_on:
+      - cert-rotation
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    restart: unless-stopped
+
+volumes:
+  certs:
+    driver: local
