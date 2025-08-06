@@ -65,8 +65,17 @@ class ACMClient:
         Returns:
             Tuple of (certificate, private_key, certificate_chain) or None if failed
         """
+        # First check if certificate is exportable
+        cert_details = await self.get_certificate_details(cert_arn)
+        if cert_details:
+            options = cert_details.get('Options', {})
+            if options.get('Export') == 'DISABLED':
+                logger.error(f"Certificate {cert_arn} has export disabled - cannot download. "
+                           f"Re-import with export enabled or use a different certificate.")
+                return None
+
         try:
-            # First, try without passphrase (for AWS-issued certificates)
+            # Try without passphrase (for AWS-issued certificates)
             response = self.client.export_certificate(CertificateArn=cert_arn)
 
             certificate = response.get('Certificate', '')
@@ -88,10 +97,17 @@ class ACMClient:
             elif error_code == 'InvalidStateException':
                 logger.warning(f"Certificate not in exportable state: {cert_arn}")
                 return None
-            elif error_code == 'ValidationException' and 'Passphrase' in str(e):
-                # This is an imported certificate that requires a passphrase
-                logger.warning(f"Certificate {cert_arn} requires passphrase for export (imported certificate)")
-                return await self._try_export_with_passphrase(cert_arn)
+            elif error_code == 'ValidationException':
+                if 'Passphrase' in str(e):
+                    # This is an imported certificate that requires a passphrase
+                    logger.warning(f"Certificate {cert_arn} requires passphrase for export (imported certificate)")
+                    return await self._try_export_with_passphrase(cert_arn)
+                elif 'export is disabled' in str(e).lower() or 'cannot be exported' in str(e).lower():
+                    logger.error(f"Certificate {cert_arn} has export disabled - cannot download")
+                    return None
+                else:
+                    logger.error(f"Validation error for certificate {cert_arn}: {e}")
+                    return None
             else:
                 logger.error(f"Error exporting certificate {cert_arn}: {e}")
                 raise

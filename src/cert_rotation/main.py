@@ -104,33 +104,33 @@ async def service_status() -> Dict[str, Any]:
     return await scheduler.get_status()
 
 
-@app.get("/status/list_acm")
-async def list_acm_certificates(include_tags: bool = False) -> Dict[str, Any]:
-    """List all certificates from AWS Certificate Manager."""
+@app.get("/status/list_secrets")
+async def list_secrets(include_tags: bool = False) -> Dict[str, Any]:
+    """List all certificate secrets from AWS Secrets Manager."""
     global scheduler
 
     if not scheduler:
         raise HTTPException(status_code=503, detail="Scheduler not initialized")
 
     try:
-        # Get all certificates from ACM
-        all_certificates = await scheduler.acm_client.list_certificates(include_tags=include_tags)
+        # Get all secrets from Secrets Manager
+        all_secrets = await scheduler.secrets_client.list_secrets(include_tags=include_tags)
 
-        # Get monitored certificates with details
-        monitored_certificates = await scheduler.acm_client.get_monitored_certificates(include_tags=include_tags)
+        # Get monitored secrets with details
+        monitored_secrets = await scheduler.secrets_client.get_monitored_secrets(include_tags=include_tags)
 
         return {
-            "all_certificates": all_certificates,
-            "monitored_certificates": monitored_certificates,
-            "monitored_arns": settings.acm_cert_arns_list,
-            "total_certificates": len(all_certificates),
-            "monitored_count": len(monitored_certificates),
+            "all_secrets": all_secrets,
+            "monitored_secrets": monitored_secrets,
+            "monitored_secret_names": settings.secrets_names_list,
+            "total_secrets": len(all_secrets),
+            "monitored_count": len(monitored_secrets),
             "include_tags": include_tags
         }
 
     except Exception as e:
-        logger.error(f"Error listing ACM certificates: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list certificates: {str(e)}")
+        logger.error(f"Error listing secrets: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list secrets: {str(e)}")
 
 
 def main():

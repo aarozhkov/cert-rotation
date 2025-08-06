@@ -1,12 +1,12 @@
 # Certificate Rotation Service
 
-A Python service for synchronizing AWS Certificate Manager (ACM) certificates with local filesystem for HAProxy certificate management on EC2 instances.
+A Python service for synchronizing certificates stored in AWS Secrets Manager with local filesystem for HAProxy certificate management on EC2 instances.
 
 ## Features
 
 - **FastAPI HTTP Service**: RESTful API with health checks and manual triggers
 - **Prometheus Metrics**: Certificate expiration monitoring and operational metrics
-- **AWS ACM Integration**: Automatic certificate download and renewal detection
+- **AWS Secrets Manager Integration**: Automatic certificate download and change detection
 - **File System Monitoring**: Real-time detection of certificate changes
 - **HAProxy Integration**: Automatic reload signals when certificates are updated
 - **Container Ready**: Dockerized with UV package management
@@ -90,7 +90,7 @@ All configuration is done via environment variables with the `CERT_ROTATION_` pr
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `CERT_ROTATION_CERT_PATH` | Path where certificates are stored | `/app/certs` |
-| `CERT_ROTATION_ACM_CERT_ARNS` | Comma-separated list of ACM certificate ARNs | `arn:aws:acm:...` |
+| `CERT_ROTATION_SECRETS_NAMES` | Comma-separated list of Secrets Manager secret names | `my-cert-secret,another-cert` |
 
 ### Optional Configuration
 

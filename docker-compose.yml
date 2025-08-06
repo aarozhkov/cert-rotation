@@ -10,8 +10,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock  # If needed for container management
     environment:
       - CERT_ROTATION_CERT_PATH=/app/certs
-      - CERT_ROTATION_ACM_CERT_ARNS=arn:aws:acm:us-east-1:123456789012:certificate/example
-      - CERT_ROTATION_AWS_REGION=us-east-1
+      - CERT_ROTATION_SECRETS_NAMES=my-certificate,another-certificate
+      - CERT_ROTATION_AWS_REGION=us-west-2
       - CERT_ROTATION_CHECK_INTERVAL_MINUTES=60
       - CERT_ROTATION_LOG_LEVEL=INFO
       - CERT_ROTATION_HAPROXY_RELOAD_URL=http://haproxy:8404/reload

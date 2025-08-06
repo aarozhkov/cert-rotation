@@ -47,9 +47,9 @@ sync_duration_seconds = Histogram(
     registry=metrics_registry
 )
 
-acm_requests_total = Counter(
-    'acm_requests_total',
-    'Total number of ACM API requests',
+secrets_requests_total = Counter(
+    'secrets_requests_total',
+    'Total number of Secrets Manager API requests',
     ['operation', 'status'],
     registry=metrics_registry
 )
@@ -126,10 +126,15 @@ class MetricsCollector:
         if duration is not None:
             sync_duration_seconds.observe(duration)
     
-    def record_acm_request(self, operation: str, success: bool):
-        """Record an ACM API request."""
+    def record_secrets_request(self, operation: str, success: bool):
+        """Record a Secrets Manager API request."""
         status = 'success' if success else 'failure'
-        acm_requests_total.labels(operation=operation, status=status).inc()
+        secrets_requests_total.labels(operation=operation, status=status).inc()
+
+    # Keep the old method name for backward compatibility during transition
+    def record_acm_request(self, operation: str, success: bool):
+        """Record a Secrets Manager API request (legacy method name)."""
+        self.record_secrets_request(operation, success)
     
     def record_haproxy_reload(self, success: bool):
         """Record a HAProxy reload attempt."""

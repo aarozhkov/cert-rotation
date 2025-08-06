@@ -12,7 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import settings
-from .acm_client import ACMClient
+from .secrets_client import SecretsManagerClient
 from .cert_monitor import CertificateMonitor
 from .haproxy_client import haproxy_client
 from .metrics import metrics_collector
@@ -26,7 +26,7 @@ class CertificateScheduler:
     
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
-        self.acm_client = ACMClient()
+        self.secrets_client = SecretsManagerClient()
         self.cert_monitor = CertificateMonitor()
         self.is_running = False
         self.sync_in_progress = False
@@ -104,21 +104,21 @@ class CertificateScheduler:
         
         try:
             logger.info("Starting certificate synchronization")
-            
-            # Get monitored certificates from ACM
-            acm_certificates = await self.acm_client.get_monitored_certificates()
-            metrics_collector.record_acm_request('get_monitored_certificates', True)
-            
+
+            # Get monitored certificates from Secrets Manager
+            secrets_data = await self.secrets_client.get_monitored_secrets()
+            metrics_collector.record_acm_request('get_monitored_secrets', True)
+
             certificates_updated = False
-            
-            for cert_arn, cert_details in acm_certificates.items():
+
+            for secret_name, secret_data in secrets_data.items():
                 try:
-                    updated = await self._sync_single_certificate(cert_arn, cert_details)
+                    updated = await self._sync_single_certificate(secret_name, secret_data)
                     if updated:
                         certificates_updated = True
                 except Exception as e:
-                    logger.error(f"Error syncing certificate {cert_arn}: {e}")
-                    self.sync_errors.append(f"Sync error for {cert_arn}: {str(e)}")
+                    logger.error(f"Error syncing certificate from secret {secret_name}: {e}")
+                    self.sync_errors.append(f"Sync error for {secret_name}: {str(e)}")
             
             # Rescan local certificates after sync
             self.cert_monitor.scan_certificates()
@@ -145,82 +145,91 @@ class CertificateScheduler:
             metrics_collector.record_sync_operation(success, duration)
             self.sync_in_progress = False
     
-    async def _sync_single_certificate(self, cert_arn: str, cert_details: Dict) -> bool:
+    async def _sync_single_certificate(self, secret_name: str, secret_data: Dict) -> bool:
         """
-        Sync a single certificate from ACM.
-        
+        Sync a single certificate from Secrets Manager.
+
         Returns:
             True if certificate was updated, False otherwise
         """
-        cert_name = self.acm_client.get_certificate_name(cert_details)
-        
+        cert_name = self.secrets_client.get_certificate_name_from_secret(secret_data)
+
         # Check if we need to download this certificate
-        needs_download = await self._certificate_needs_update(cert_arn, cert_details, cert_name)
-        
+        needs_download = await self._certificate_needs_update(secret_name, secret_data, cert_name)
+
         if not needs_download:
             logger.debug(f"Certificate {cert_name} is up to date")
             return False
-        
-        # Export certificate from ACM
-        logger.info(f"Downloading certificate {cert_name} from ACM")
-        cert_data = await self.acm_client.export_certificate(cert_arn)
-        
+
+        # Extract certificate data from secret
+        logger.info(f"Downloading certificate {cert_name} from Secrets Manager")
+        cert_data = await self.secrets_client.extract_certificate_data(secret_data)
+
         if not cert_data:
-            logger.error(f"Failed to export certificate {cert_arn}")
-            metrics_collector.record_acm_request('export_certificate', False)
+            logger.warning(f"Could not extract certificate data from secret {secret_name}")
+            metrics_collector.record_acm_request('extract_certificate', False)
             return False
-        
-        metrics_collector.record_acm_request('export_certificate', True)
-        
+
+        metrics_collector.record_acm_request('extract_certificate', True)
+
         certificate, private_key, certificate_chain = cert_data
-        
+
         # Save certificate to filesystem
         try:
             self.cert_monitor.save_certificate(
-                cert_name, 
-                certificate, 
-                private_key, 
+                cert_name,
+                certificate,
+                private_key,
                 certificate_chain
             )
             logger.info(f"Successfully saved certificate {cert_name}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to save certificate {cert_name}: {e}")
             return False
     
-    async def _certificate_needs_update(self, cert_arn: str, cert_details: Dict, cert_name: str) -> bool:
+    async def _certificate_needs_update(self, secret_name: str, secret_data: Dict, cert_name: str) -> bool:
         """Check if a certificate needs to be downloaded/updated."""
-        
+
         # Check if certificate file exists locally
         cert_file_path = self.cert_monitor.cert_path / f"{cert_name}.pem"
-        
+
         if not cert_file_path.exists():
             logger.info(f"Certificate {cert_name} not found locally, will download")
             return True
-        
+
         # Get local certificate info
         local_cert = self.cert_monitor.certificates.get(str(cert_file_path))
-        
+
         if not local_cert:
             logger.info(f"Could not parse local certificate {cert_name}, will re-download")
             return True
-        
-        # Compare serial numbers or other identifiers
-        acm_serial = cert_details.get('Serial')
-        if acm_serial and local_cert.serial_number:
-            if acm_serial != local_cert.serial_number:
-                logger.info(f"Certificate {cert_name} serial number changed, will update")
-                return True
-        
-        # Check expiration dates
-        acm_expiry = cert_details.get('NotAfter')
-        if acm_expiry and local_cert.expiration_date:
-            # If ACM certificate expires later, it might be renewed
-            if acm_expiry > local_cert.expiration_date:
-                logger.info(f"Certificate {cert_name} appears to be renewed, will update")
-                return True
-        
+
+        # Compare based on secret metadata (version changes)
+        metadata = secret_data.get('_metadata', {})
+        last_changed = metadata.get('last_changed_date')
+
+        if last_changed:
+            # If secret was changed recently, update the certificate
+            # This is a simple approach - you could store last sync timestamps for more precision
+            logger.info(f"Secret {secret_name} was recently changed, will update certificate")
+            return True
+
+        # For now, always check if the certificate content differs
+        # Extract certificate from secret and compare with local
+        try:
+            cert_data = await self.secrets_client.extract_certificate_data(secret_data)
+            if cert_data:
+                secret_cert, _, _ = cert_data
+                # Simple comparison - you could parse and compare serial numbers
+                if secret_cert.strip() != local_cert.cert_data.strip():
+                    logger.info(f"Certificate {cert_name} content changed, will update")
+                    return True
+        except Exception as e:
+            logger.warning(f"Could not compare certificate content for {cert_name}: {e}")
+            return True  # When in doubt, update
+
         return False
     
     def _on_certificate_file_changed(self, file_path: str):
@@ -245,7 +254,7 @@ class CertificateScheduler:
             'sync_in_progress': self.sync_in_progress,
             'last_sync_time': self.last_sync_time.isoformat() if self.last_sync_time else None,
             'certificates_count': len(self.cert_monitor.certificates),
-            'monitored_arns': settings.acm_cert_arns_list,
+            'monitored_secrets': settings.secrets_names_list,
             'check_interval_minutes': settings.check_interval_minutes,
             'recent_errors': self.sync_errors[-5:],  # Last 5 errors
             'next_sync': self._get_next_sync_time()

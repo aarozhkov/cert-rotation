@@ -18,17 +18,13 @@ class Settings(BaseSettings):
     
     # Certificate management
     cert_path: str = Field(..., description="Path where certificates are stored")
-    acm_cert_arns: str = Field(
+    secrets_names: str = Field(
         default="",
-        description="Comma-separated list of ACM certificate ARNs to monitor"
+        description="Comma-separated list of AWS Secrets Manager secret names to monitor"
     )
-    
+
     # AWS configuration
     aws_region: str = Field(default="us-east-1", description="AWS region")
-    acm_passphrase: Optional[str] = Field(
-        default=None,
-        description="Passphrase for imported ACM certificates (if required)"
-    )
     
     # Scheduling configuration
     check_interval_minutes: int = Field(
@@ -50,11 +46,11 @@ class Settings(BaseSettings):
     metrics_enabled: bool = Field(default=True, description="Enable Prometheus metrics")
     
     @property
-    def acm_cert_arns_list(self) -> List[str]:
-        """Get ACM certificate ARNs as a list."""
-        if not self.acm_cert_arns:
+    def secrets_names_list(self) -> List[str]:
+        """Get Secrets Manager secret names as a list."""
+        if not self.secrets_names:
             return []
-        return [arn.strip() for arn in self.acm_cert_arns.split(',') if arn.strip()]
+        return [name.strip() for name in self.secrets_names.split(',') if name.strip()]
     
     @validator('cert_path')
     def validate_cert_path(cls, v):
