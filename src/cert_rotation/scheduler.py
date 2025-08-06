@@ -32,14 +32,18 @@ class CertificateScheduler:
         self.sync_in_progress = False
         self.last_sync_time = None
         self.sync_errors = []
+        self.event_loop = None  # Store reference to the main event loop
     
     async def start(self):
         """Start the scheduler and monitoring."""
         if self.is_running:
             return
-        
+
         logger.info("Starting certificate scheduler")
-        
+
+        # Store reference to the current event loop
+        self.event_loop = asyncio.get_running_loop()
+
         # Start certificate monitoring
         self.cert_monitor.start_monitoring()
         self.cert_monitor.add_change_callback(self._on_certificate_file_changed)
@@ -67,16 +71,17 @@ class CertificateScheduler:
         """Stop the scheduler and monitoring."""
         if not self.is_running:
             return
-        
+
         logger.info("Stopping certificate scheduler")
-        
+
         # Stop scheduler
         self.scheduler.shutdown(wait=True)
-        
+
         # Stop monitoring
         self.cert_monitor.stop_monitoring()
-        
+
         self.is_running = False
+        self.event_loop = None  # Clear event loop reference
         logger.info("Certificate scheduler stopped")
     
     async def _initial_scan(self):
@@ -236,9 +241,19 @@ class CertificateScheduler:
         """Handle certificate file changes."""
         logger.info(f"Certificate file changed: {file_path}")
         metrics_collector.record_file_change('modified')
-        
-        # Schedule HAProxy reload
-        asyncio.create_task(self._handle_certificate_change())
+
+        # Schedule HAProxy reload using the stored event loop
+        if self.is_running and self.event_loop and not self.event_loop.is_closed():
+            try:
+                # Schedule the coroutine in the main event loop from this thread
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_certificate_change(),
+                    self.event_loop
+                )
+            except Exception as e:
+                logger.error(f"Error scheduling certificate change handler: {e}")
+        else:
+            logger.warning("Scheduler not running or event loop not available, cannot handle certificate change")
     
     async def _handle_certificate_change(self):
         """Handle certificate file changes by reloading HAProxy."""
