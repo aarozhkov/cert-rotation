@@ -128,6 +128,45 @@ class SecretsManagerClient:
                 logger.warning(f"Could not get data for monitored secret: {secret_name}")
         
         return monitored_secrets
+
+    async def get_monitored_secrets_metadata(self, include_tags: bool = False) -> Dict[str, Dict]:
+        """Get metadata for all monitored secrets without sensitive data."""
+        monitored_secrets = {}
+
+        for secret_name in settings.secrets_names_list:
+            try:
+                # Get basic secret info without the actual secret value
+                response = self.client.describe_secret(SecretId=secret_name)
+
+                metadata = {
+                    'arn': response.get('ARN'),
+                    'name': response.get('Name'),
+                    'description': response.get('Description'),
+                    'created_date': response.get('CreatedDate'),
+                    'last_accessed_date': response.get('LastAccessedDate'),
+                    'last_changed_date': response.get('LastChangedDate'),
+                    'last_rotated_date': response.get('LastRotatedDate'),
+                    'version_ids_to_stages': response.get('VersionIdsToStages', {}),
+                    'owning_service': response.get('OwningService'),
+                    'primary_region': response.get('PrimaryRegion'),
+                    'replication_status': response.get('ReplicationStatus', [])
+                }
+
+                if include_tags:
+                    metadata['tags'] = response.get('Tags', [])
+
+                monitored_secrets[secret_name] = {'_metadata': metadata}
+
+            except ClientError as e:
+                error_code = e.response['Error']['Code']
+                if error_code == 'ResourceNotFoundException':
+                    logger.warning(f"Secret not found: {secret_name}")
+                else:
+                    logger.error(f"Error getting metadata for secret {secret_name}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error getting metadata for secret {secret_name}: {e}")
+
+        return monitored_secrets
     
     def get_certificate_name_from_secret(self, secret_data: Dict) -> str:
         """Extract a suitable filename from secret data."""

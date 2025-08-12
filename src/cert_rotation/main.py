@@ -113,11 +113,11 @@ async def list_secrets(include_tags: bool = False) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail="Scheduler not initialized")
 
     try:
-        # Get all secrets from Secrets Manager
+        # Get all secrets from Secrets Manager (metadata only)
         all_secrets = await scheduler.secrets_client.list_secrets(include_tags=include_tags)
 
-        # Get monitored secrets with details
-        monitored_secrets = await scheduler.secrets_client.get_monitored_secrets(include_tags=include_tags)
+        # Get monitored secrets metadata only (no sensitive data)
+        monitored_secrets = await scheduler.secrets_client.get_monitored_secrets_metadata(include_tags=include_tags)
 
         return {
             "all_secrets": all_secrets,
@@ -131,6 +131,61 @@ async def list_secrets(include_tags: bool = False) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error listing secrets: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list secrets: {str(e)}")
+
+
+@app.get("/debug/secret/{secret_name}")
+async def get_secret_debug_info(secret_name: str, include_content: bool = False) -> Dict[str, Any]:
+    """
+    Get detailed secret information for debugging.
+    WARNING: Use include_content=true only for debugging - it exposes certificate data!
+    """
+    global scheduler
+
+    if not scheduler:
+        raise HTTPException(status_code=503, detail="Scheduler not initialized")
+
+    try:
+        if include_content:
+            # Get full secret data (including sensitive content)
+            logger.warning(f"DEBUG: Exposing secret content for {secret_name}")
+            secret_data = await scheduler.secrets_client.get_secret_value(secret_name)
+
+            if not secret_data:
+                raise HTTPException(status_code=404, detail=f"Secret {secret_name} not found")
+
+            # Mask sensitive data partially for logs
+            masked_data = secret_data.copy()
+            if 'certificate' in masked_data:
+                cert = masked_data['certificate']
+                masked_data['certificate'] = cert[:50] + "..." + cert[-50:] if len(cert) > 100 else cert
+            if 'private_key' in masked_data:
+                key = masked_data['private_key']
+                masked_data['private_key'] = key[:50] + "..." + key[-50:] if len(key) > 100 else key
+
+            return {
+                "secret_name": secret_name,
+                "content": secret_data,
+                "warning": "This response contains sensitive certificate data!"
+            }
+        else:
+            # Get only metadata
+            metadata_response = await scheduler.secrets_client.get_monitored_secrets_metadata(include_tags=True)
+            secret_metadata = metadata_response.get(secret_name)
+
+            if not secret_metadata:
+                raise HTTPException(status_code=404, detail=f"Secret {secret_name} not found or not monitored")
+
+            return {
+                "secret_name": secret_name,
+                "metadata": secret_metadata,
+                "note": "Use include_content=true to see certificate data (debugging only)"
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting secret debug info for {secret_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get secret info: {str(e)}")
 
 
 def main():
