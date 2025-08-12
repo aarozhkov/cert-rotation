@@ -57,6 +57,7 @@ docker build -t cert-rotation .
 - [Tag-based certificate discovery](#tag-based-discovery) - Automatic certificate discovery using tags
 - [EC2 with IAM role](#ec2-iam-role) - Production EC2 deployment
 - [Development with credentials](#development-credentials) - Local testing
+- [Docker signal reload](#docker-signal-reload) - Container-based HAProxy reload via HUP signal
 - [Complete production setup](#production-monitoring) - Full monitoring and health checks
 
 2. **Basic Secrets Manager setup:** {#basic-secrets-manager}
@@ -120,16 +121,32 @@ docker run -d \
   cert-rotation
 ```
 
-5. **Complete production setup:** {#production-monitoring}
+5. **Docker signal reload (recommended for containers):** {#docker-signal-reload}
+```bash
+# Run with Docker socket access for HUP signal reload
+docker run -d \
+  --name cert-rotation \
+  -p 8000:8000 \
+  -v /opt/haproxy/certs:/app/certs \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e CERT_ROTATION_SECRETS_NAMES="prod-web-cert,prod-api-cert" \
+  -e CERT_ROTATION_AWS_REGION="us-east-1" \
+  -e CERT_ROTATION_HAPROXY_CONTAINER_NAME="haproxy" \
+  -e CERT_ROTATION_CHECK_INTERVAL_MINUTES="30" \
+  --restart unless-stopped \
+  cert-rotation
+```
+
+6. **Complete production setup:** {#production-monitoring}
 ```bash
 docker run -d \
   --name cert-rotation \
   -p 8000:8000 \
   -v /opt/haproxy/certs:/app/certs:rw \
-  -v /var/run/haproxy.sock:/var/run/haproxy.sock \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   -e CERT_ROTATION_SECRETS_NAMES="prod-web-cert,prod-api-cert,prod-admin-cert" \
   -e CERT_ROTATION_AWS_REGION="us-east-1" \
-  -e CERT_ROTATION_HAPROXY_STATS_SOCKET="/var/run/haproxy.sock" \
+  -e CERT_ROTATION_HAPROXY_CONTAINER_NAME="haproxy" \
   -e CERT_ROTATION_CHECK_INTERVAL_MINUTES="30" \
   -e CERT_ROTATION_METRICS_ENABLED="true" \
   -e CERT_ROTATION_LOG_LEVEL="INFO" \
@@ -199,6 +216,7 @@ The service supports two methods for discovering certificates in AWS Secrets Man
 | `CERT_ROTATION_CHECK_INTERVAL_MINUTES` | `60` | Sync interval |
 | `CERT_ROTATION_HAPROXY_RELOAD_URL` | `None` | HAProxy HTTP reload endpoint |
 | `CERT_ROTATION_HAPROXY_STATS_SOCKET` | `None` | HAProxy stats socket path |
+| `CERT_ROTATION_HAPROXY_CONTAINER_NAME` | `None` | HAProxy container name for Docker signal reload |
 | `CERT_ROTATION_METRICS_ENABLED` | `true` | Enable Prometheus metrics |
 
 ## API Endpoints
@@ -333,16 +351,115 @@ For broader access to all secrets (less secure):
 
 ## HAProxy Integration
 
-The service supports two methods for HAProxy certificate reloads:
+The service supports multiple methods for HAProxy certificate reloads:
 
 1. **HTTP Endpoint**: Configure `CERT_ROTATION_HAPROXY_RELOAD_URL`
 2. **Stats Socket**: Configure `CERT_ROTATION_HAPROXY_STATS_SOCKET`
+3. **Docker Signal (HUP)**: Configure `CERT_ROTATION_HAPROXY_CONTAINER_NAME`
 
-Example HAProxy configuration for HTTP reload:
+### Method 1: HTTP Endpoint Reload
+
+Configure HAProxy with an HTTP stats interface that supports reload operations:
+
+```bash
+# Environment variable
+CERT_ROTATION_HAPROXY_RELOAD_URL="http://haproxy:8404/reload"
 ```
-stats socket /var/run/haproxy.sock mode 600 level admin
-stats bind-process all
+
+Example HAProxy configuration:
 ```
+frontend stats
+    bind *:8404
+    stats enable
+    stats uri /stats
+    stats refresh 30s
+    stats admin if TRUE
+```
+
+### Method 2: Stats Socket Reload
+
+Configure HAProxy with a Unix socket for administrative commands:
+
+```bash
+# Environment variable
+CERT_ROTATION_HAPROXY_STATS_SOCKET="/var/run/haproxy.sock"
+```
+
+Example HAProxy configuration:
+```
+global
+    stats socket /var/run/haproxy.sock mode 600 level admin
+    stats timeout 30s
+```
+
+Docker volume mount example:
+```bash
+docker run -d \
+  --name cert-rotation \
+  -v /var/run/haproxy.sock:/var/run/haproxy.sock \
+  cert-rotation
+```
+
+### Method 3: Docker Signal (HUP) - Recommended for Containers
+
+Send a HUP signal to the HAProxy container via Docker API to trigger a graceful reload:
+
+```bash
+# Environment variables
+CERT_ROTATION_HAPROXY_CONTAINER_NAME="haproxy"
+```
+
+**Requirements:**
+- Docker socket access: `-v /var/run/docker.sock:/var/run/docker.sock`
+- HAProxy container configured for graceful reload on HUP signal
+
+**Docker Compose Example:**
+```yaml
+version: '3.8'
+services:
+  cert-rotation:
+    build: .
+    volumes:
+      - ./certs:/app/certs
+      - /var/run/docker.sock:/var/run/docker.sock  # Required for Docker API access
+    environment:
+      - CERT_ROTATION_HAPROXY_CONTAINER_NAME=haproxy
+
+  haproxy:
+    image: haproxy:2.8
+    container_name: haproxy  # Must match HAPROXY_CONTAINER_NAME
+    volumes:
+      - ./certs:/etc/ssl/certs:ro
+```
+
+**Docker Run Example:**
+```bash
+# Run cert-rotation with Docker socket access
+docker run -d \
+  --name cert-rotation \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/haproxy/certs:/app/certs \
+  -e CERT_ROTATION_HAPROXY_CONTAINER_NAME="haproxy" \
+  cert-rotation
+
+# Run HAProxy container
+docker run -d \
+  --name haproxy \
+  -p 80:80 -p 443:443 \
+  -v /opt/haproxy/certs:/etc/ssl/certs:ro \
+  haproxy:2.8
+```
+
+**How HUP Signal Works:**
+- The service sends a `SIGHUP` to the HAProxy container via Docker API
+- HAProxy performs a graceful reload without dropping connections
+- New certificates are loaded without service interruption
+- This method works reliably across different HAProxy versions
+
+**Security Considerations:**
+- Docker socket access grants significant privileges
+- Consider using Docker socket proxy in production
+- Ensure proper container isolation and security policies
 
 ## Development
 
@@ -374,6 +491,9 @@ mypy src/
 5. **Secret Names**: Verify secret names in `CERT_ROTATION_SECRETS_NAMES` exist in Secrets Manager
 6. **AWS Region**: Ensure `CERT_ROTATION_AWS_REGION` matches where secrets are stored
 7. **IAM Permissions**: Verify the service can access the specific secrets (check CloudTrail logs)
+8. **Docker Socket Access**: Ensure `/var/run/docker.sock` is mounted when using Docker signal reload
+9. **Container Name**: Verify `CERT_ROTATION_HAPROXY_CONTAINER_NAME` matches the actual HAProxy container name
+10. **HAProxy HUP Signal**: Ensure HAProxy is configured to handle SIGHUP for graceful reloads
 
 ### Logs
 

@@ -51,6 +51,10 @@ class Settings(BaseSettings):
         default=None,
         description="HAProxy stats socket path"
     )
+    haproxy_container_name: Optional[str] = Field(
+        default=None,
+        description="HAProxy container name for Docker signal reload"
+    )
     
     # Metrics configuration
     metrics_enabled: bool = Field(default=True, description="Enable Prometheus metrics")

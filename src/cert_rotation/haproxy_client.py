@@ -20,20 +20,22 @@ class HAProxyClient:
     def __init__(self):
         self.reload_url = settings.haproxy_reload_url
         self.stats_socket = settings.haproxy_stats_socket
+        self.container_name = settings.haproxy_container_name
     
     async def reload_certificates(self) -> bool:
         """
         Reload HAProxy certificates.
-        
-        Tries multiple methods:
+
+        Tries multiple methods in order:
         1. HTTP reload endpoint (if configured)
         2. Stats socket command (if configured)
-        
+        3. Docker signal (HUP) (if configured)
+
         Returns:
             True if reload was successful, False otherwise
         """
         success = False
-        
+
         # Try HTTP reload first
         if self.reload_url:
             success = await self._reload_via_http()
@@ -41,7 +43,7 @@ class HAProxyClient:
                 logger.info("HAProxy reload successful via HTTP")
                 metrics_collector.record_haproxy_reload(True)
                 return True
-        
+
         # Try stats socket
         if self.stats_socket:
             success = await self._reload_via_socket()
@@ -49,12 +51,20 @@ class HAProxyClient:
                 logger.info("HAProxy reload successful via stats socket")
                 metrics_collector.record_haproxy_reload(True)
                 return True
-        
+
+        # Try Docker signal (HUP)
+        if self.container_name:
+            success = await self._reload_via_docker_signal()
+            if success:
+                logger.info("HAProxy reload successful via Docker signal")
+                metrics_collector.record_haproxy_reload(True)
+                return True
+
         # If no methods configured, log warning
-        if not self.reload_url and not self.stats_socket:
+        if not self.reload_url and not self.stats_socket and not self.container_name:
             logger.warning("No HAProxy reload method configured")
             return True  # Consider this "successful" since it's a config issue
-        
+
         logger.error("All HAProxy reload methods failed")
         metrics_collector.record_haproxy_reload(False)
         return False
@@ -143,7 +153,31 @@ class HAProxyClient:
         except Exception as e:
             logger.error(f"Error getting HAProxy status: {e}")
             return None
-    
+
+    async def _reload_via_docker_signal(self) -> bool:
+        """Send HUP signal to HAProxy container via Docker API."""
+        try:
+            async with httpx.AsyncClient(
+                base_url="http+unix://%2Fvar%2Frun%2Fdocker.sock",
+                timeout=10.0
+            ) as client:
+                # Send HUP signal via Docker API
+                response = await client.post(
+                    f"/containers/{self.container_name}/kill",
+                    params={"signal": "HUP"}
+                )
+                
+                if response.status_code == 204:
+                    logger.info(f"HUP signal sent to container {self.container_name}")
+                    return True
+                else:
+                    logger.error(f"Failed to send HUP signal: {response.status_code}")
+                    return False
+                
+        except Exception as e:
+            logger.error(f"Error sending HUP signal via Docker API: {e}")
+            return False
+
     async def check_certificate_status(self) -> Optional[dict]:
         """Check SSL certificate status in HAProxy."""
         if not self.stats_socket:
