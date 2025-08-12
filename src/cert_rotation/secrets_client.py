@@ -167,6 +167,74 @@ class SecretsManagerClient:
                 logger.error(f"Unexpected error getting metadata for secret {secret_name}: {e}")
 
         return monitored_secrets
+
+    async def get_secrets_by_tag(self, tag_key: str, tag_value: str, include_tags: bool = True) -> Dict[str, Dict]:
+        """
+        Get all secrets that have a specific tag key/value pair.
+
+        Args:
+            tag_key: The tag key to filter by
+            tag_value: The tag value to filter by
+            include_tags: Whether to include tags in the response
+
+        Returns:
+            Dictionary of secret names to secret data
+        """
+        try:
+            secrets_with_tag = {}
+
+            # First, list all secrets with tags
+            all_secrets = await self.list_secrets(include_tags=True)
+
+            # Filter secrets by tag
+            for secret in all_secrets:
+                secret_name = secret.get('Name')
+                secret_tags = secret.get('Tags', [])
+
+                # Check if the secret has the required tag
+                has_matching_tag = False
+                for tag in secret_tags:
+                    if tag.get('Key') == tag_key and tag.get('Value') == tag_value:
+                        has_matching_tag = True
+                        break
+
+                if has_matching_tag and secret_name:
+                    logger.debug(f"Found secret with matching tag: {secret_name}")
+
+                    # Get the full secret data
+                    secret_data = await self.get_secret_value(secret_name)
+                    if secret_data:
+                        # Add tags to metadata if requested
+                        if include_tags:
+                            secret_data['_metadata']['tags'] = secret_tags
+
+                        secrets_with_tag[secret_name] = secret_data
+                    else:
+                        logger.warning(f"Could not get data for secret with matching tag: {secret_name}")
+
+            logger.info(f"Found {len(secrets_with_tag)} secrets with tag {tag_key}={tag_value}")
+            return secrets_with_tag
+
+        except Exception as e:
+            logger.error(f"Error getting secrets by tag {tag_key}={tag_value}: {e}")
+            raise
+
+    async def get_secrets_by_env_tag(self, include_tags: bool = True) -> Dict[str, Dict]:
+        """
+        Get all secrets that match the tag key/value pair from environment variables.
+
+        Args:
+            include_tags: Whether to include tags in the response
+
+        Returns:
+            Dictionary of secret names to secret data, or empty dict if tag env vars not set
+        """
+        if not settings.tag_key or not settings.tag_value:
+            logger.warning("Tag key or tag value not configured in environment variables")
+            return {}
+
+        logger.info(f"Fetching secrets with tag {settings.tag_key}={settings.tag_value}")
+        return await self.get_secrets_by_tag(settings.tag_key, settings.tag_value, include_tags)
     
     def get_certificate_name_from_secret(self, secret_data: Dict) -> str:
         """Extract a suitable filename from secret data."""

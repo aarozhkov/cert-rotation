@@ -23,6 +23,16 @@ class Settings(BaseSettings):
         description="Comma-separated list of AWS Secrets Manager secret names to monitor"
     )
 
+    # Tag-based secret filtering
+    tag_key: Optional[str] = Field(
+        default=None,
+        description="Tag key to filter secrets by"
+    )
+    tag_value: Optional[str] = Field(
+        default=None,
+        description="Tag value to filter secrets by"
+    )
+
     # AWS configuration
     aws_region: str = Field(default="us-east-1", description="AWS region")
     
