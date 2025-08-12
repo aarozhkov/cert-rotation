@@ -163,12 +163,18 @@ class HAProxyClient:
     async def _reload_via_docker_signal(self) -> bool:
         """Send HUP signal to HAProxy container via Docker API."""
         try:
+            # Create Unix socket transport for Docker API
+            transport = httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")
+
             async with httpx.AsyncClient(
-                base_url="http+unix://%2Fvar%2Frun%2Fdocker.sock", timeout=10.0
+                transport=transport,
+                base_url="http://localhost",
+                timeout=10.0
             ) as client:
                 # Send HUP signal via Docker API
                 response = await client.post(
-                    f"/containers/{self.container_name}/kill", params={"signal": "HUP"}
+                    f"/containers/{self.container_name}/kill",
+                    params={"signal": "HUP"}
                 )
 
                 if response.status_code == 204:
