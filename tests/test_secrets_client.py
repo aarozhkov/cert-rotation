@@ -154,3 +154,97 @@ class TestSecretsClientTagFiltering:
 
         # Should return empty dict
         assert result == {}
+
+
+class TestSchedulerIntegration:
+    """Test scheduler integration with tag-based discovery."""
+
+    @pytest.mark.asyncio
+    async def test_scheduler_uses_tag_discovery(self, mock_settings):
+        """Test that scheduler uses tag-based discovery when configured."""
+        from cert_rotation.scheduler import CertificateScheduler
+
+        # Mock the secrets client methods
+        with patch('cert_rotation.scheduler.SecretsManagerClient') as mock_client_class:
+            mock_client = Mock()
+            mock_client_class.return_value = mock_client
+
+            # Mock tag-based discovery
+            mock_client.get_secrets_by_env_tag = AsyncMock(return_value={
+                'prod-cert-1': {'certificate': 'cert1', '_metadata': {'name': 'prod-cert-1'}},
+                'prod-cert-2': {'certificate': 'cert2', '_metadata': {'name': 'prod-cert-2'}}
+            })
+
+            # Mock other required methods
+            mock_client.get_monitored_secrets = AsyncMock(return_value={})
+
+            scheduler = CertificateScheduler()
+
+            # Test _get_secrets_data method
+            secrets_data = await scheduler._get_secrets_data()
+
+            # Should use tag-based discovery
+            mock_client.get_secrets_by_env_tag.assert_called_once()
+            mock_client.get_monitored_secrets.assert_not_called()
+
+            assert len(secrets_data) == 2
+            assert 'prod-cert-1' in secrets_data
+            assert 'prod-cert-2' in secrets_data
+
+    @pytest.mark.asyncio
+    async def test_scheduler_fallback_to_explicit_names(self, mock_settings):
+        """Test scheduler falls back to explicit names when tag discovery fails."""
+        from cert_rotation.scheduler import CertificateScheduler
+
+        # Configure both tag and explicit names
+        mock_settings.secrets_names_list = ['explicit-cert-1', 'explicit-cert-2']
+
+        with patch('cert_rotation.scheduler.SecretsManagerClient') as mock_client_class:
+            mock_client = Mock()
+            mock_client_class.return_value = mock_client
+
+            # Mock tag-based discovery to fail
+            mock_client.get_secrets_by_env_tag = AsyncMock(side_effect=Exception("Tag discovery failed"))
+
+            # Mock explicit discovery to succeed
+            mock_client.get_monitored_secrets = AsyncMock(return_value={
+                'explicit-cert-1': {'certificate': 'cert1', '_metadata': {'name': 'explicit-cert-1'}}
+            })
+
+            scheduler = CertificateScheduler()
+
+            # Test _get_secrets_data method
+            secrets_data = await scheduler._get_secrets_data()
+
+            # Should try tag-based first, then fall back to explicit
+            mock_client.get_secrets_by_env_tag.assert_called_once()
+            mock_client.get_monitored_secrets.assert_called_once()
+
+            assert len(secrets_data) == 1
+            assert 'explicit-cert-1' in secrets_data
+
+    @pytest.mark.asyncio
+    async def test_scheduler_no_configuration(self, mock_settings):
+        """Test scheduler behavior when no discovery method is configured."""
+        from cert_rotation.scheduler import CertificateScheduler
+
+        # Clear all configuration
+        mock_settings.tag_key = None
+        mock_settings.tag_value = None
+        mock_settings.secrets_names_list = []
+
+        with patch('cert_rotation.scheduler.SecretsManagerClient') as mock_client_class:
+            mock_client = Mock()
+            mock_client_class.return_value = mock_client
+
+            scheduler = CertificateScheduler()
+
+            # Test _get_secrets_data method
+            secrets_data = await scheduler._get_secrets_data()
+
+            # Should return empty dict
+            assert secrets_data == {}
+
+            # Should not call any discovery methods
+            mock_client.get_secrets_by_env_tag.assert_not_called()
+            mock_client.get_monitored_secrets.assert_not_called()

@@ -98,21 +98,25 @@ class CertificateScheduler:
         await self.sync_certificates()
     
     async def sync_certificates(self):
-        """Synchronize certificates from ACM."""
+        """Synchronize certificates from Secrets Manager."""
         if self.sync_in_progress:
             logger.warning("Certificate sync already in progress, skipping")
             return
-        
+
         self.sync_in_progress = True
         start_time = time.time()
         success = False
-        
+
         try:
             logger.info("Starting certificate synchronization")
 
-            # Get monitored certificates from Secrets Manager
-            secrets_data = await self.secrets_client.get_monitored_secrets()
-            metrics_collector.record_acm_request('get_monitored_secrets', True)
+            # Get certificates from Secrets Manager using configured method
+            secrets_data = await self._get_secrets_data()
+
+            if not secrets_data:
+                logger.warning("No certificates found to synchronize")
+                success = True  # Not an error, just no certificates
+                return
 
             certificates_updated = False
 
@@ -124,32 +128,68 @@ class CertificateScheduler:
                 except Exception as e:
                     logger.error(f"Error syncing certificate from secret {secret_name}: {e}")
                     self.sync_errors.append(f"Sync error for {secret_name}: {str(e)}")
-            
+
             # Rescan local certificates after sync
             self.cert_monitor.scan_certificates()
-            
+
             # Update metrics
             metrics_collector.update_certificate_metrics(self.cert_monitor.certificates)
-            
+
             # Reload HAProxy if certificates were updated
             if certificates_updated:
                 logger.info("Certificates updated, reloading HAProxy")
                 await haproxy_client.reload_certificates()
-            
+
             success = True
             self.last_sync_time = datetime.now()
             logger.info("Certificate synchronization completed successfully")
-            
+
         except Exception as e:
             logger.error(f"Certificate synchronization failed: {e}")
             self.sync_errors.append(f"Sync failed: {str(e)}")
             metrics_collector.record_acm_request('sync_certificates', False)
-        
+
         finally:
             duration = time.time() - start_time
             metrics_collector.record_sync_operation(success, duration)
             self.sync_in_progress = False
-    
+
+    async def _get_secrets_data(self) -> Dict[str, Dict]:
+        """
+        Get secrets data using the configured discovery method.
+
+        Returns:
+            Dictionary of secret names to secret data
+        """
+        # Check if tag-based discovery is configured
+        if settings.tag_key and settings.tag_value:
+            logger.info(f"Using tag-based discovery: {settings.tag_key}={settings.tag_value}")
+            try:
+                secrets_data = await self.secrets_client.get_secrets_by_env_tag()
+                metrics_collector.record_acm_request('get_secrets_by_tag', True)
+                logger.info(f"Found {len(secrets_data)} certificates using tag-based discovery")
+                return secrets_data
+            except Exception as e:
+                logger.error(f"Tag-based discovery failed: {e}")
+                metrics_collector.record_acm_request('get_secrets_by_tag', False)
+                # Fall back to explicit secret names if available
+                if settings.secrets_names_list:
+                    logger.info("Falling back to explicit secret names")
+                else:
+                    raise
+
+        # Use explicit secret names (traditional method)
+        if settings.secrets_names_list:
+            logger.info(f"Using explicit secret names: {settings.secrets_names_list}")
+            secrets_data = await self.secrets_client.get_monitored_secrets()
+            metrics_collector.record_acm_request('get_monitored_secrets', True)
+            logger.info(f"Found {len(secrets_data)} certificates using explicit secret names")
+            return secrets_data
+
+        # No configuration found
+        logger.warning("No certificate discovery method configured. Set either CERT_ROTATION_TAG_KEY/TAG_VALUE or CERT_ROTATION_SECRETS_NAMES")
+        return {}
+
     async def _sync_single_certificate(self, secret_name: str, secret_data: Dict) -> bool:
         """
         Sync a single certificate from Secrets Manager.
@@ -264,12 +304,29 @@ class CertificateScheduler:
     
     async def get_status(self) -> Dict[str, Any]:
         """Get scheduler status information."""
+        # Determine discovery method
+        discovery_method = "none"
+        discovery_config = {}
+
+        if settings.tag_key and settings.tag_value:
+            discovery_method = "tag-based"
+            discovery_config = {
+                'tag_key': settings.tag_key,
+                'tag_value': settings.tag_value
+            }
+        elif settings.secrets_names_list:
+            discovery_method = "explicit"
+            discovery_config = {
+                'monitored_secrets': settings.secrets_names_list
+            }
+
         return {
             'is_running': self.is_running,
             'sync_in_progress': self.sync_in_progress,
             'last_sync_time': self.last_sync_time.isoformat() if self.last_sync_time else None,
             'certificates_count': len(self.cert_monitor.certificates),
-            'monitored_secrets': settings.secrets_names_list,
+            'discovery_method': discovery_method,
+            'discovery_config': discovery_config,
             'check_interval_minutes': settings.check_interval_minutes,
             'recent_errors': self.sync_errors[-5:],  # Last 5 errors
             'next_sync': self._get_next_sync_time()
